@@ -33,7 +33,9 @@
     V1, V2, V3, V4 or All (default). All = V1, V2 and V3 (V4 only with -IncludeV4).
 
 .PARAMETER SeedDependabot
-    V2 only: also seed main with an outdated pin (see above). Takes about 5 to 15 minutes to settle.
+    V2 only: also seed main with an outdated pin (see above). Takes about 5 to 15 minutes to settle. Do not close
+    the Dependabot pull request by hand afterwards: Dependabot closes it by itself when main is restored, whereas a
+    manual close makes Dependabot ignore that release in later runs.
 
 .PARAMETER PreventSelfReview
     V3 only: turn "prevent self-review" ON for the production environment. Default is OFF, so one presenter
@@ -141,6 +143,7 @@ function Invoke-GitStrict {
 }
 
 # --- Context -------------------------------------------------------------------------------------------------
+Set-Location -LiteralPath (Split-Path -Parent $PSScriptRoot)   # the scripts work from any directory
 $root = (Invoke-Git rev-parse --show-toplevel | Select-Object -First 1)
 if ($script:exit -ne 0 -or -not $root) { throw 'Run this script inside a clone of the demo repository.' }
 Set-Location $root
@@ -247,10 +250,22 @@ function Restore-CleanMain {
     }
     finally { Remove-StaleWorktree $wt }
     foreach ($pr in @(Invoke-GhJson pr list --repo $slug --state open --author 'app/dependabot' --json 'number,title')) {
-        if ($pr.title -match $SeedPackage) {
-            Invoke-Gh pr close $pr.number --repo $slug --delete-branch | Out-Null
-            Write-Note "Closed the Dependabot pull request #$($pr.number)."
+        if ($pr.title -notmatch $SeedPackage) { continue }
+        # Dependabot closes its own pull request once the vulnerable pin is gone from main. Closing it by hand would
+        # make Dependabot ignore that release in later runs, so give it a few minutes and close by hand only as a
+        # last resort.
+        $deadline = (Get-Date).AddMinutes(5)
+        $state = 'OPEN'
+        while ((Get-Date) -lt $deadline) {
+            $state = (Invoke-GhJson pr view $pr.number --repo $slug --json state).state
+            if ($state -ne 'OPEN') { break }
+            Start-Sleep -Seconds 15
         }
+        if ($state -eq 'OPEN') {
+            Invoke-Gh pr close $pr.number --repo $slug --delete-branch | Out-Null
+            Write-Warn "Dependabot pull request #$($pr.number) was still open after 5 minutes and was closed by hand. Dependabot may now ignore that release; the next seed re-opens the pull request if needed."
+        }
+        else { Write-Note "Dependabot closed its own pull request #$($pr.number) by itself ($state)." }
     }
     Write-Ok "main restored to $SeedPackage==$CleanPin"
 }
@@ -404,6 +419,21 @@ Do not merge. It is created by `scripts/Reset-GitHubDemo.ps1` and replaced every
     if ($SeedDependabot) { Invoke-SeedDependabot }
 }
 
+function Restore-ClosedDependabotPr {
+    # A Dependabot pull request that someone closed by hand makes Dependabot ignore that release ("I won't notify you
+    # again about this release"). Re-opening the same pull request (on a restored branch) is the documented way back.
+    $closed = @(Invoke-GhJson pr list --repo $slug --state closed --author 'app/dependabot' --limit 20 --json 'number,title,headRefName,headRefOid,mergedAt' |
+            Where-Object { $_.title -match $SeedPackage -and -not $_.mergedAt }) | Select-Object -First 1
+    if (-not $closed) { return $null }
+    $null = Invoke-Native gh api "repos/$slug/git/ref/heads/$($closed.headRefName)"
+    if ($script:exit -ne 0) {
+        $null = Invoke-Gh api -X POST "repos/$slug/git/refs" -f "ref=refs/heads/$($closed.headRefName)" -f "sha=$($closed.headRefOid)"
+    }
+    $null = Invoke-Gh pr reopen $closed.number --repo $slug
+    Write-Note "Dependabot had ignored this release after an earlier manual close - re-opened its pull request #$($closed.number)."
+    return $closed
+}
+
 function Invoke-SeedDependabot {
     Write-Section 'V2 (optional) - seed one outdated pin on main for Dependabot'
     $text = Get-MainRequirements
@@ -431,6 +461,7 @@ function Invoke-SeedDependabot {
     $clock = [Diagnostics.Stopwatch]::StartNew()
     $alertSeen = $false
     $prSeen = $null
+    $reopenTried = $false
     $deadline = (Get-Date).AddMinutes(20)
     while ((Get-Date) -lt $deadline -and (-not $alertSeen -or -not $prSeen)) {
         if (-not $alertSeen) {
@@ -441,6 +472,10 @@ function Invoke-SeedDependabot {
             $prs = @(Invoke-GhJson pr list --repo $slug --state open --author 'app/dependabot' --json 'number,title,url')
             $match = $prs | Where-Object { $_.title -match $SeedPackage } | Select-Object -First 1
             if ($match) { $prSeen = $match; Write-Ok ("Dependabot security-update pull request: {0} (after {1:N0} s)" -f $match.url, $clock.Elapsed.TotalSeconds) }
+            elseif ($alertSeen -and -not $reopenTried -and $clock.Elapsed.TotalSeconds -gt 300) {
+                $reopenTried = $true
+                $null = Restore-ClosedDependabotPr
+            }
         }
         if (-not $alertSeen -or -not $prSeen) { Start-Sleep -Seconds 15 }
     }

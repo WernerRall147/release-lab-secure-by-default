@@ -32,6 +32,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $env:GH_PAGER = ''
 
+Set-Location -LiteralPath (Split-Path -Parent $PSScriptRoot)   # the scripts work from any directory
 $remoteUrl = (& git remote get-url origin 2>&1 | Select-Object -First 1)
 if ($remoteUrl -notmatch 'github\.com[:/](?<slug>[^/]+/release-lab-secure-by-default)(\.git)?/?$') {
     throw "The 'origin' remote is not the release-lab-secure-by-default repository."

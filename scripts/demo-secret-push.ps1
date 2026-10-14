@@ -101,6 +101,7 @@ switch ($Provider) {
 $stopwatch = [Diagnostics.Stopwatch]::StartNew()
 
 # --- Safety checks -------------------------------------------------------------------------------------------
+Set-Location -LiteralPath (Split-Path -Parent $PSScriptRoot)   # the scripts work from any directory
 $root = Invoke-Git rev-parse --show-toplevel | Select-Object -First 1
 if ($script:gitExit -ne 0 -or -not $root) { throw 'Run this script inside a clone of the demo repository.' }
 $script:root = $root
