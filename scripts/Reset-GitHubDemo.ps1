@@ -74,8 +74,15 @@ function Write-Warn([string] $Text) { Write-Host "  [warn] $Text" -ForegroundCol
 
 function Invoke-Native {
     # Runs a command, returns its output lines and sets $script:exit. Never throws on a non-zero exit code.
-    $lines = & $args[0] @($args | Select-Object -Skip 1) 2>&1 | ForEach-Object { "$_" }
-    $script:exit = $LASTEXITCODE
+    # (Windows PowerShell 5.1 turns anything a native command writes to stderr into an error when
+    # $ErrorActionPreference is 'Stop', so it is relaxed for the call.)
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $lines = & $args[0] @($args | Select-Object -Skip 1) 2>&1 | ForEach-Object { "$_" }
+        $script:exit = $LASTEXITCODE
+    }
+    finally { $ErrorActionPreference = $previous }
     return $lines
 }
 
@@ -93,8 +100,14 @@ function Invoke-GhJson {
 
 function Invoke-GhBody([string] $Method, [string] $Path, $Body) {
     $json = $Body | ConvertTo-Json -Depth 8 -Compress
-    $lines = $json | & gh api -X $Method $Path --input - 2>&1 | ForEach-Object { "$_" }
-    if ($LASTEXITCODE -ne 0) { throw "gh api $Method $Path failed: $($lines -join ' ')" }
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $lines = $json | & gh api -X $Method $Path --input - 2>&1 | ForEach-Object { "$_" }
+        $code = $LASTEXITCODE
+    }
+    finally { $ErrorActionPreference = $previous }
+    if ($code -ne 0) { throw "gh api $Method $Path failed: $($lines -join ' ')" }
     return $lines
 }
 
@@ -215,7 +228,7 @@ function Restore-CleanMain {
         Push-MainDirectly $wt
     }
     finally { Remove-StaleWorktree $wt }
-    foreach ($pr in @(Invoke-GhJson pr list --repo $slug --state open --author 'app/dependabot' --json number,title)) {
+    foreach ($pr in @(Invoke-GhJson pr list --repo $slug --state open --author 'app/dependabot' --json 'number,title')) {
         if ($pr.title -match $SeedPackage) {
             Invoke-Gh pr close $pr.number --repo $slug --delete-branch | Out-Null
             Write-Note "Closed the Dependabot pull request #$($pr.number)."
@@ -243,18 +256,29 @@ function Push-MainDirectly([string] $Worktree) {
 }
 
 function Wait-ForChecks([string] $Sha, [int] $TimeoutMinutes = 12) {
+    # The five checks every pull request gets: two from the CI/dependency workflows, two CodeQL analysis jobs and
+    # the "CodeQL" results check that reports the alerts.
+    $expected = 'ci', 'dependency-review', 'Analyze (python)', 'Analyze (actions)', 'CodeQL'
     $deadline = (Get-Date).AddMinutes($TimeoutMinutes)
-    $quiet = 0
     $runs = @()
     while ((Get-Date) -lt $deadline) {
         $resp = Invoke-GhJson api "repos/$slug/commits/$Sha/check-runs?per_page=100"
         $runs = @($resp.check_runs)
-        $open = @($runs | Where-Object { $_.status -ne 'completed' })
-        if ($runs.Count -ge 4 -and $open.Count -eq 0) { $quiet++ } else { $quiet = 0 }
-        if ($quiet -ge 2) { break }
-        Start-Sleep -Seconds 10
+        $finished = 0
+        foreach ($name in $expected) {
+            if (@($runs | Where-Object { $_.name -eq $name -and $_.status -eq 'completed' }).Count -gt 0) { $finished++ }
+        }
+        if ($finished -eq $expected.Count) { break }
+        Start-Sleep -Seconds 8
     }
     return $runs
+}
+
+function Test-AutofixOnPage([int] $PrNumber) {
+    # Copilot Autofix shows its "Suggested changeset" inside the CodeQL annotation on the pull request page. The REST
+    # autofix endpoints only cover alerts on the default branch, so the public page is the place to look.
+    $html = (& curl.exe -s -L -A 'Mozilla/5.0' "https://github.com/$slug/pull/$PrNumber") -join "`n"
+    return ($html -match 'FROM payments WHERE reference = \?')
 }
 
 function Reset-V2 {
@@ -339,16 +363,22 @@ Do not merge. It is created by `scripts/Reset-GitHubDemo.ps1` and replaced every
     }
     Write-Note ("All checks finished {0:N0} s after the push." -f $watch.Elapsed.TotalSeconds)
 
-    $alerts = @(Invoke-GhJson api "repos/$slug/code-scanning/alerts?ref=refs/pull/$prNumber/merge&per_page=50")
-    if ($alerts.Count -eq 0) { Write-Warn 'CodeQL reported no alert on this pull request yet. Open the Checks tab and wait for "CodeQL".' }
+    $alerts = @(Invoke-GhJson api "repos/$slug/code-scanning/alerts?ref=refs/pull/$prNumber/head&per_page=50")
+    if ($alerts.Count -eq 0) { Write-Warn 'CodeQL reported no alert on this pull request. Open the Checks tab and look at "CodeQL".' }
     foreach ($alert in $alerts) {
-        Write-Ok "CodeQL alert #$($alert.number): $($alert.rule.id) ($($alert.rule.security_severity_level)) in $($alert.most_recent_instance.location.path)"
-        $fix = Invoke-Native gh api "repos/$slug/code-scanning/alerts/$($alert.number)/autofix"
-        if ($script:exit -eq 0) {
-            $status = (($fix -join "`n") | ConvertFrom-Json).status
-            Write-Ok "Copilot Autofix for alert #$($alert.number): $status"
+        $where = "$($alert.most_recent_instance.location.path):$($alert.most_recent_instance.location.start_line)"
+        Write-Ok "CodeQL alert #$($alert.number): $($alert.rule.id) ($($alert.rule.security_severity_level)) at $where"
+    }
+    if ($alerts.Count -gt 0) {
+        Write-Note 'Looking for the Copilot Autofix suggestion on the pull request (can take a few minutes)...'
+        $fixWatch = [Diagnostics.Stopwatch]::StartNew()
+        $found = $false
+        while (-not $found -and $fixWatch.Elapsed.TotalSeconds -lt 240) {
+            $found = Test-AutofixOnPage $prNumber
+            if (-not $found) { Start-Sleep -Seconds 10 }
         }
-        else { Write-Note "Copilot Autofix: no suggestion yet for alert #$($alert.number)." }
+        if ($found) { Write-Ok ("Copilot Autofix suggestion is on the pull request ({0:N0} s after the checks finished): Conversation tab, in the CodeQL annotation" -f $fixWatch.Elapsed.TotalSeconds) }
+        else { Write-Warn 'No Copilot Autofix suggestion appeared within 4 minutes (see the runbook for the fallback).' }
     }
     Write-Note "Pull request: $($url.Trim())"
     Write-Note "Checks tab:   $($url.Trim())/checks"
@@ -390,7 +420,7 @@ function Invoke-SeedDependabot {
             if ($found.Count -gt 0) { $alertSeen = $true; Write-Ok ("Dependabot alert(s) for {0}: {1} (after {2:N0} s)" -f $SeedPackage, $found.Count, $clock.Elapsed.TotalSeconds) }
         }
         if (-not $prSeen) {
-            $prs = @(Invoke-GhJson pr list --repo $slug --state open --author 'app/dependabot' --json number,title,url)
+            $prs = @(Invoke-GhJson pr list --repo $slug --state open --author 'app/dependabot' --json 'number,title,url')
             $match = $prs | Where-Object { $_.title -match $SeedPackage } | Select-Object -First 1
             if ($match) { $prSeen = $match; Write-Ok ("Dependabot security-update pull request: {0} (after {1:N0} s)" -f $match.url, $clock.Elapsed.TotalSeconds) }
         }
@@ -442,7 +472,7 @@ function Reset-V3 {
     Write-Ok 'Immutable releases are on (a published release and its tag cannot be changed)'
 
     $latest = $null
-    $out = Invoke-Native gh release view --repo $slug --json tagName,isImmutable
+    $out = Invoke-Native gh release view --repo $slug --json 'tagName,isImmutable'
     if ($script:exit -eq 0) { $latest = (($out -join "`n") | ConvertFrom-Json) }
     if ($latest) { Write-Ok "Latest release: $($latest.tagName) (immutable: $($latest.isImmutable))" }
     else { Write-Warn 'No release exists yet. Publish one with: gh workflow run release.yml -f version=<next>.' }
@@ -453,7 +483,7 @@ function Reset-V3 {
 # --- V4 ------------------------------------------------------------------------------------------------------
 function Reset-V4 {
     Write-Section 'V4 - Copilot cloud agent (optional)'
-    $issues = @(Invoke-GhJson issue list --repo $slug --state open --label demo-agent --json number,title)
+    $issues = @(Invoke-GhJson issue list --repo $slug --state open --label demo-agent --json 'number,title')
     foreach ($issue in $issues) {
         Invoke-Gh issue close $issue.number --repo $slug --comment 'Closed by scripts/Reset-GitHubDemo.ps1 (demo reset).' | Out-Null
         Write-Note "Closed issue #$($issue.number)."

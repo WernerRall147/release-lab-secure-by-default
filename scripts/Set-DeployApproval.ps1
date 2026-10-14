@@ -39,9 +39,22 @@ if ($remoteUrl -notmatch 'github\.com[:/](?<slug>[^/]+/release-lab-secure-by-def
 $slug = $Matches['slug']
 $owner = $slug.Split('/')[0]
 
+function Invoke-Gh([string[]] $GhArgs, [string] $Stdin) {
+    # Windows PowerShell 5.1 treats stderr output of native commands as an error under 'Stop', so relax it for the call.
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        if ($Stdin) { $out = $Stdin | & gh @GhArgs 2>&1 | ForEach-Object { "$_" } }
+        else { $out = & gh @GhArgs 2>&1 | ForEach-Object { "$_" } }
+        $code = $LASTEXITCODE
+    }
+    finally { $ErrorActionPreference = $previous }
+    if ($code -ne 0) { throw "gh $($GhArgs -join ' ') failed: $($out -join ' ')" }
+    return $out
+}
+
 function Get-UserId([string] $Login) {
-    $id = & gh api "users/$Login" --jq '.id' 2>&1
-    if ($LASTEXITCODE -ne 0) { throw "GitHub user '$Login' was not found." }
+    $id = Invoke-Gh @('api', "users/$Login", '--jq', '.id')
     return [int64]"$id"
 }
 
@@ -58,15 +71,14 @@ $body = @{
     deployment_branch_policy = @{ protected_branches = $false; custom_branch_policies = $true }
 }
 $json = $body | ConvertTo-Json -Depth 6 -Compress
-$result = $json | & gh api -X PUT "repos/$slug/environments/$Environment" --input - 2>&1
-if ($LASTEXITCODE -ne 0) { throw "Could not update the environment: $result" }
+$null = Invoke-Gh @('api', '-X', 'PUT', "repos/$slug/environments/$Environment", '--input', '-') $json
 
-$policies = @(& gh api "repos/$slug/environments/$Environment/deployment-branch-policies" --jq '.branch_policies[].name')
+$policies = @(Invoke-Gh @('api', "repos/$slug/environments/$Environment/deployment-branch-policies", '--jq', '.branch_policies[].name'))
 if ($policies -notcontains 'main') {
-    '{"name":"main","type":"branch"}' | & gh api -X POST "repos/$slug/environments/$Environment/deployment-branch-policies" --input - | Out-Null
+    $null = Invoke-Gh @('api', '-X', 'POST', "repos/$slug/environments/$Environment/deployment-branch-policies", '--input', '-') '{"name":"main","type":"branch"}'
 }
 
-$info = (& gh api "repos/$slug/environments/$Environment") | ConvertFrom-Json
+$info = (Invoke-Gh @('api', "repos/$slug/environments/$Environment")) -join "`n" | ConvertFrom-Json
 $rule = $info.protection_rules | Where-Object { $_.type -eq 'required_reviewers' } | Select-Object -First 1
 $names = ($rule.reviewers | ForEach-Object { $_.reviewer.login }) -join ', '
 $mode = if ($rule.prevent_self_review) { 'ON - a second person must approve' } else { 'OFF - the person who starts a deployment can approve it' }

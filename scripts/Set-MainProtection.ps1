@@ -41,16 +41,30 @@ function Say([string] $Text, [string] $Color = 'Green') {
     if (-not $Quiet) { Write-Host "  [ok]   $Text" -ForegroundColor $Color }
 }
 
+function Invoke-Gh([string[]] $GhArgs, [string] $Stdin) {
+    # Windows PowerShell 5.1 treats stderr output of native commands as an error under 'Stop', so relax it for the call.
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        if ($Stdin) { $out = $Stdin | & gh @GhArgs 2>&1 | ForEach-Object { "$_" } }
+        else { $out = & gh @GhArgs 2>&1 | ForEach-Object { "$_" } }
+        $code = $LASTEXITCODE
+    }
+    finally { $ErrorActionPreference = $previous }
+    if ($code -ne 0) { throw "gh $($GhArgs -join ' ') failed: $($out -join ' ')" }
+    return $out
+}
+
 function Find-Ruleset {
-    $list = (& gh api "repos/$slug/rulesets" 2>&1) | ConvertFrom-Json
+    $text = (Invoke-Gh @('api', "repos/$slug/rulesets")) -join "`n"
+    $list = $text | ConvertFrom-Json
     return $list | Where-Object { $_.name -eq $rulesetName } | Select-Object -First 1
 }
 
 function Set-Enforcement([string] $Value) {
     $existing = Find-Ruleset
     if (-not $existing) { throw "Ruleset '$rulesetName' does not exist. Run with -Action Apply first." }
-    $out = (@{ enforcement = $Value } | ConvertTo-Json -Compress) | & gh api -X PUT "repos/$slug/rulesets/$($existing.id)" --input - 2>&1
-    if ($LASTEXITCODE -ne 0) { throw "Could not set enforcement to ${Value}: $out" }
+    $null = Invoke-Gh @('api', '-X', 'PUT', "repos/$slug/rulesets/$($existing.id)", '--input', '-') (@{ enforcement = $Value } | ConvertTo-Json -Compress)
 }
 
 switch ($Action) {
@@ -72,11 +86,10 @@ switch ($Action) {
         $json = Get-Content -Raw -Path $RulesetFile
         $existing = Find-Ruleset
         if ($existing) {
-            $out = $json | & gh api -X PUT "repos/$slug/rulesets/$($existing.id)" --input - 2>&1
+            $null = Invoke-Gh @('api', '-X', 'PUT', "repos/$slug/rulesets/$($existing.id)", '--input', '-') $json
         } else {
-            $out = $json | & gh api -X POST "repos/$slug/rulesets" --input - 2>&1
+            $null = Invoke-Gh @('api', '-X', 'POST', "repos/$slug/rulesets", '--input', '-') $json
         }
-        if ($LASTEXITCODE -ne 0) { throw "Could not apply the ruleset: $out" }
         $applied = Find-Ruleset
         Say "Ruleset '$rulesetName' applied (enforcement: $($applied.enforcement))."
     }
