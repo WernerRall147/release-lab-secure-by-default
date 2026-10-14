@@ -24,7 +24,10 @@
         immutable-releases setting, and makes sure at least one verified release exists.
 
     V4  Copilot cloud agent (only with -IncludeV4)
-        Closes the previous demo issue and pull request created by this script.
+        Checks that Copilot can be assigned issues in this repository, closes the previous demo issue and the pull
+        request (copilot/* branch) the agent opened for it, and creates one fresh, unassigned issue labelled
+        demo-agent. Assigning that issue to Copilot (the live step) starts one cloud agent session, which uses
+        Copilot premium requests according to the plan of the person who assigns it.
 
 .PARAMETER Scenario
     V1, V2, V3, V4 or All (default). All = V1, V2 and V3 (V4 only with -IncludeV4).
@@ -65,6 +68,21 @@ $SeedPackage = 'gunicorn'
 $SeedPin = '21.2.0'
 $CleanPin = '26.2.0'
 $utf8 = New-Object Text.UTF8Encoding($false)
+
+$V4IssueTitle = 'Filter payment status by channel (for example ?channel=mobile)'
+$V4IssueBody = @'
+**Goal:** let callers filter `/api/payments/status` by `channel` (`MOBILE`, `BRANCH`, `WEB`), the same way they can already filter by `status`.
+
+**Acceptance criteria**
+- `GET /api/payments/status?channel=mobile` returns only the records whose `channel` is `MOBILE` (case-insensitive).
+- `channel` can be combined with `status`.
+- The `summary` counts describe the filtered records.
+- An unknown channel returns an empty `payments` list and the summary `{"total": 0}`.
+- Add pytest tests next to the existing ones in `tests/test_app.py`.
+- Do not change dependencies or anything under `.github/`.
+
+All data in this repository is synthetic and fictional.
+'@
 
 # --- Helpers -------------------------------------------------------------------------------------------------
 function Write-Section([string] $Text) { Write-Host ''; Write-Host "=== $Text ===" -ForegroundColor Cyan }
@@ -483,16 +501,41 @@ function Reset-V3 {
 # --- V4 ------------------------------------------------------------------------------------------------------
 function Reset-V4 {
     Write-Section 'V4 - Copilot cloud agent (optional)'
-    $issues = @(Invoke-GhJson issue list --repo $slug --state open --label demo-agent --json 'number,title')
-    foreach ($issue in $issues) {
-        Invoke-Gh issue close $issue.number --repo $slug --comment 'Closed by scripts/Reset-GitHubDemo.ps1 (demo reset).' | Out-Null
+
+    $query = 'query($o:String!,$n:String!){ repository(owner:$o,name:$n){ suggestedActors(capabilities:[CAN_BE_ASSIGNED], first:20){ nodes{ login } } } }'
+    $logins = @(Invoke-Native gh api graphql -f "query=$query" -F "o=$owner" -F "n=$($slug.Split('/')[1])" --jq '.data.repository.suggestedActors.nodes[].login')
+    if ($script:exit -ne 0) { Write-Warn 'Could not ask GitHub whether Copilot can be assigned issues here.' }
+    elseif ($logins -contains 'copilot-swe-agent') { Write-Ok 'Copilot cloud agent can be assigned issues in this repository' }
+    else { Write-Warn 'Copilot cloud agent is NOT available for this repository or account - skip V4.' }
+
+    foreach ($pr in @(Invoke-GhJson pr list --repo $slug --state open --json 'number,headRefName')) {
+        if ($pr.headRefName -like 'copilot/*') {
+            Invoke-Gh pr close $pr.number --repo $slug --delete-branch --comment 'Closed by scripts/Reset-GitHubDemo.ps1 (demo reset).' | Out-Null
+            Write-Note "Closed the agent pull request #$($pr.number)."
+        }
+    }
+    foreach ($line in (Invoke-Git ls-remote --heads origin 'copilot/*')) {
+        if ($line -match 'refs/heads/(?<b>\S+)$') {
+            Invoke-Gh api -X DELETE "repos/$slug/git/refs/heads/$($Matches['b'])" | Out-Null
+            Write-Note "Deleted the leftover branch $($Matches['b'])."
+        }
+    }
+    foreach ($issue in @(Invoke-GhJson issue list --repo $slug --state open --label demo-agent --json number)) {
+        Invoke-Gh issue close $issue.number --repo $slug --reason 'not planned' --comment 'Closed by scripts/Reset-GitHubDemo.ps1 (demo reset).' | Out-Null
         Write-Note "Closed issue #$($issue.number)."
     }
-    foreach ($pr in @(Invoke-GhJson pr list --repo $slug --state open --label demo-agent --json number)) {
-        Invoke-Gh pr close $pr.number --repo $slug --delete-branch | Out-Null
-        Write-Note "Closed pull request #$($pr.number)."
-    }
-    Write-Ok 'No open demo-agent issues or pull requests'
+
+    $null = Invoke-Gh label create demo-agent --repo $slug --color 5319E7 --description 'Issue used for the Copilot cloud agent demo' --force
+    $work = Join-Path $root '.demo-work'
+    New-Item -ItemType Directory -Force -Path $work | Out-Null
+    $bodyFile = Join-Path $work 'v4-issue.md'
+    [IO.File]::WriteAllText($bodyFile, ($V4IssueBody -replace "`r`n", "`n"), $utf8)
+    try { $created = @(Invoke-Gh issue create --repo $slug --title $V4IssueTitle --body-file $bodyFile --label demo-agent) }
+    finally { Remove-Item $bodyFile -Force -ErrorAction SilentlyContinue }
+    $url = ($created | Select-Object -Last 1).Trim()
+    Write-Ok "Fresh issue created, not assigned yet: $url"
+    Write-Note "Live step: gh issue edit $(($url -split '/')[-1]) --add-assignee '@copilot'   (or assign Copilot in the issue sidebar)"
+    Write-Note 'The draft pull request appears about 10 seconds after assigning; the agent needs about 3 minutes.'
 }
 
 # --- Run -----------------------------------------------------------------------------------------------------

@@ -14,6 +14,7 @@ Naira, NGN) and every "secret" used by the demos is a fake value generated at ru
 | Deploy without stored passwords | A workflow signs in to Azure with OpenID Connect (no secret) after a person approves the `production` environment | `.github/workflows/deploy.yml`, `.github/workflows/azure-deploy.yml` |
 | Prove what was built | The release workflow publishes the package with an SBOM and signed attestations (build provenance and SBOM) on an immutable release; anyone can verify them | `.github/workflows/release.yml` |
 | Guardrails on `main` | A ruleset requires a pull request with one approval and passing checks, and blocks force pushes and deletion, with no bypass | `.github/rulesets/main.json` |
+| Optional: an AI agent proposes, a person decides | Assigning an issue to the GitHub Copilot cloud agent opens a draft pull request; its checks need a person's go-ahead and the required approval must come from someone other than the person who asked | `scripts/Reset-GitHubDemo.ps1 -Scenario V4` (needs a paid Copilot plan) |
 
 ## The application
 
