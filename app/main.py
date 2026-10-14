@@ -4,6 +4,7 @@ from flask import Flask, jsonify, request
 
 from . import __version__
 from .data import PAYMENTS
+from .insecure_demo import insecure_demo
 
 SERVICE_NAME = "Contoso Bank - Payments Status API"
 
@@ -43,6 +44,8 @@ def create_app() -> Flask:
             summary=summarise(records),
             payments=records,
         )
+
+    app.register_blueprint(insecure_demo)
 
     return app
 
