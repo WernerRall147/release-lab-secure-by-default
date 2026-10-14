@@ -183,7 +183,7 @@ Check 'Environment "production" exists with a required reviewer' {
     Assert ($envInfo) 'environment not found'
     $rule = $envInfo.protection_rules | Where-Object { $_.type -eq 'required_reviewers' }
     Assert ($rule -and @($rule.reviewers).Count -ge 1) 'no required reviewer'
-    $mode = if ($rule.prevent_self_review) { 'prevent self-review ON: a second person must approve' } else { 'prevent self-review OFF: rehearsal mode, one person can approve' }
+    $mode = if ($rule.prevent_self_review) { 'prevent self-review ON: a second person must approve' } else { 'prevent self-review OFF: one person can approve (single-reviewer demo mode)' }
     "reviewers: $(@($rule.reviewers | ForEach-Object { $_.reviewer.login }) -join ', '); $mode"
 }
 Check 'Environment deploys from main only' {

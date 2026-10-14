@@ -41,7 +41,7 @@
     do not close it by hand: Dependabot closes it by itself when main is restored by a later reset.
 
 .PARAMETER PreventSelfReview
-    V3 only: turn "prevent self-review" ON for the production environment. Default is OFF, so one presenter
+    V3 only: turn "prevent self-review" ON for the production environment. Default is OFF, so one person
     can approve a deployment alone. With it ON, a second person must approve.
 
 .PARAMETER NoWait
@@ -533,7 +533,7 @@ function Reset-V3 {
     if ($script:exit -eq 0) { $latest = (($out -join "`n") | ConvertFrom-Json) }
     if ($latest) { Write-Ok "Latest release: $($latest.tagName) (immutable: $($latest.isImmutable))" }
     else { Write-Warn 'No release exists yet. Publish one with: gh workflow run release.yml -f version=<next>.' }
-    Write-Note "Next free version for a rehearsal release: $(Get-NextVersion)"
+    Write-Note "Next free release version: $(Get-NextVersion)"
     Write-Note 'Live run: Actions > Deploy to Azure > Run workflow, then approve in the production environment.'
 }
 

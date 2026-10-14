@@ -7,7 +7,7 @@
     skip the approval, and deployments are allowed from the main branch only.
 
     "Prevent self-review" decides whether the person who started a deployment may also approve it:
-      OFF (default)  one presenter can start and approve a deployment alone. Use this for rehearsals.
+      OFF (default)  one person can start and approve a deployment alone (single-reviewer demo mode).
       ON             a second person must approve. Use this to show a true two-person approval.
                      Add that person with -AdditionalReviewer <github-login>, otherwise nobody can approve.
 
@@ -18,7 +18,7 @@
     GitHub login(s) of extra required reviewers (they must have access to the repository).
 
 .EXAMPLE
-    .\scripts\Set-DeployApproval.ps1                                   # solo rehearsal: self-approval allowed
+    .\scripts\Set-DeployApproval.ps1                                   # solo mode: self-approval allowed
 .EXAMPLE
     .\scripts\Set-DeployApproval.ps1 -PreventSelfReview -AdditionalReviewer colleague-login
 #>

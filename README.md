@@ -89,5 +89,5 @@ Do not print these values in workflow logs: the repository is public.
   pull request branch and must never be merged.
 - The secret used by `scripts/demo-secret-push.ps1` is generated at random each time and is fake. Never use the
   "allow the secret" link in the rejection message: the demo is about the push being blocked.
-- Repository settings (rulesets, environment, security features) are scripted, so they can be restored after
-  every rehearsal.
+- Repository settings (rulesets, environment, security features) are scripted, so they can be restored to the
+  starting state after every run of a demo.
