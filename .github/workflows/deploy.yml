@@ -20,7 +20,7 @@ jobs:
   # 1. Only a release whose provenance and SBOM attestations verify can move on to the approval gate.
   verify-release:
     name: verify-release
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
       tag: ${{ steps.pick.outputs.tag }}
