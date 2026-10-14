@@ -26,8 +26,9 @@
     V4  Copilot cloud agent (only with -IncludeV4)
         Checks that Copilot can be assigned issues in this repository, closes the previous demo issue and the pull
         request (copilot/* branch) the agent opened for it, and creates one fresh, unassigned issue labelled
-        demo-agent. Assigning that issue to Copilot (the live step) starts one cloud agent session, which uses
-        Copilot premium requests according to the plan of the person who assigns it.
+        demo-agent. Assigning that issue to Copilot (the live step) starts one cloud agent session, which counts
+        against the Copilot usage allowance (premium requests or AI credits, depending on the plan) of the person
+        who assigns it.
 
 .PARAMETER Scenario
     V1, V2, V3, V4 or All (default). All = V1, V2 and V3 (V4 only with -IncludeV4).
@@ -234,15 +235,17 @@ function Reset-V1 {
 # --- V2 ------------------------------------------------------------------------------------------------------
 function Restore-CleanMain {
     $text = Get-MainRequirements
-    if ($text -notmatch "(?m)^$SeedPackage==$([regex]::Escape($SeedPin))\s*$") { return }
-    Write-Warn "main still has the seeded $SeedPackage==$SeedPin pin from an earlier run - restoring it to $CleanPin."
+    if ($text -notmatch "(?m)^$SeedPackage==") { return }
+    if ($text -match "(?m)^$SeedPackage==$([regex]::Escape($CleanPin))\s*$") { return }
+    $current = [regex]::Match($text, "(?m)^$SeedPackage==(\S+)").Groups[1].Value
+    Write-Warn "main has $SeedPackage==$current (seeded, or bumped by the Dependabot pull request) - restoring it to $CleanPin."
     $wt = Join-Path $root '.demo-work\main'
     Remove-StaleWorktree $wt
     $null = Invoke-GitStrict fetch origin main
     $null = Invoke-GitStrict worktree add --detach $wt origin/main
     try {
         $req = Join-Path $wt 'requirements.txt'
-        $content = [IO.File]::ReadAllText($req) -replace "(?m)^$SeedPackage==$([regex]::Escape($SeedPin))", "$SeedPackage==$CleanPin"
+        $content = [IO.File]::ReadAllText($req) -replace "(?m)^$SeedPackage==\S+", "$SeedPackage==$CleanPin"
         [IO.File]::WriteAllText($req, $content, $utf8)
         $null = Invoke-GitStrict -C $wt add requirements.txt
         $null = Invoke-GitStrict -C $wt commit -m "Restore $SeedPackage $CleanPin after the Dependabot demo"
@@ -420,8 +423,8 @@ Do not merge. It is created by `scripts/Reset-GitHubDemo.ps1` and replaced every
 }
 
 function Restore-ClosedDependabotPr {
-    # A Dependabot pull request that someone closed by hand makes Dependabot ignore that release ("I won't notify you
-    # again about this release"). Re-opening the same pull request (on a restored branch) is the documented way back.
+    # Dependabot does not open a second pull request for an update whose pull request was closed earlier. Its own comment
+    # says what to do: re-open that pull request (here on a restored branch, because closing deleted the branch).
     $closed = @(Invoke-GhJson pr list --repo $slug --state closed --author 'app/dependabot' --limit 20 --json 'number,title,headRefName,headRefOid,mergedAt' |
             Where-Object { $_.title -match $SeedPackage -and -not $_.mergedAt }) | Select-Object -First 1
     if (-not $closed) { return $null }
@@ -437,6 +440,7 @@ function Restore-ClosedDependabotPr {
 function Invoke-SeedDependabot {
     Write-Section 'V2 (optional) - seed one outdated pin on main for Dependabot'
     $text = Get-MainRequirements
+    if ($text -notmatch "(?m)^$SeedPackage==") { throw "$SeedPackage is not pinned in requirements.txt on main." }
     $alreadySeeded = $text -match "(?m)^$SeedPackage==$([regex]::Escape($SeedPin))\s*$"
     if (-not $alreadySeeded) {
         $wt = Join-Path $root '.demo-work\seed'
@@ -446,7 +450,6 @@ function Invoke-SeedDependabot {
         try {
             $req = Join-Path $wt 'requirements.txt'
             $content = [IO.File]::ReadAllText($req)
-            if ($content -notmatch "(?m)^$SeedPackage==") { throw "$SeedPackage is not pinned in requirements.txt." }
             $content = $content -replace "(?m)^$SeedPackage==\S+", "$SeedPackage==$SeedPin"
             [IO.File]::WriteAllText($req, $content, $utf8)
             $null = Invoke-GitStrict -C $wt add requirements.txt
@@ -480,7 +483,7 @@ function Invoke-SeedDependabot {
         if (-not $alertSeen -or -not $prSeen) { Start-Sleep -Seconds 15 }
     }
     if (-not $alertSeen) { Write-Warn 'No Dependabot alert after 20 minutes. Check Security > Dependabot.' }
-    if (-not $prSeen) { Write-Warn 'No Dependabot pull request after 20 minutes. Check Insights > Dependency graph > Dependabot.' }
+    if (-not $prSeen) { Write-Warn 'No Dependabot pull request after 20 minutes. Open one of the alerts under Security > Dependabot and click Create Dependabot security update, or check Insights > Dependency graph > Dependabot.' }
     Write-Note 'Run this script again (without -SeedDependabot) after the demo to restore a clean main.'
 }
 

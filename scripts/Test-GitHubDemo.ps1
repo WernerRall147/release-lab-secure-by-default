@@ -137,7 +137,7 @@ Check 'main has no open code scanning alerts' {
 Check 'main has no seeded outdated pin' {
     $f = Invoke-GhApi "repos/$slug/contents/requirements.txt?ref=main"
     $text = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(($f.content -replace '\s', '')))
-    Assert ($text -notmatch '(?m)^gunicorn==21\.') 'requirements.txt still has the Dependabot-demo pin (run scripts\Reset-GitHubDemo.ps1 -Scenario V2)'
+    Assert ($text -match '(?m)^gunicorn==26\.2\.0\s*$') 'requirements.txt does not have the clean gunicorn pin 26.2.0 (Dependabot demo seeded? run scripts\Reset-GitHubDemo.ps1 -Scenario V2)'
     Assert ($text -notmatch '(?m)^requests==2\.19') 'requirements.txt contains the vulnerable requests pin'
     'clean'
 } -WarnOnly
