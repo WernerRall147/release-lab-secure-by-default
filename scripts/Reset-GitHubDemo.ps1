@@ -387,9 +387,9 @@ Do not merge. It is created by `scripts/Reset-GitHubDemo.ps1` and replaced every
     $prNumber = [int]($url.Trim() -replace '^.*/pull/', '')
     Write-Ok "Pull request #$prNumber created: $($url.Trim())"
 
-    if ($NoWait) { Write-Note 'Not waiting for the checks (-NoWait). They need about 3 to 5 minutes.'; return }
+    if ($NoWait) { Write-Note 'Not waiting for the checks (-NoWait). They usually finish within 1 to 2 minutes.'; return }
 
-    Write-Note 'Waiting for the checks (CodeQL usually needs 2 to 4 minutes)...'
+    Write-Note 'Waiting for the checks (they usually finish within 1 to 2 minutes)...'
     $watch = [Diagnostics.Stopwatch]::StartNew()
     $runs = Wait-ForChecks $sha
     Write-Host ''
@@ -407,7 +407,7 @@ Do not merge. It is created by `scripts/Reset-GitHubDemo.ps1` and replaced every
         Write-Ok "CodeQL alert #$($alert.number): $($alert.rule.id) ($($alert.rule.security_severity_level)) at $where"
     }
     if ($alerts.Count -gt 0) {
-        Write-Note 'Looking for the Copilot Autofix suggestion on the pull request (can take a few minutes)...'
+        Write-Note 'Looking for the Copilot Autofix suggestion on the pull request (usually within a minute)...'
         $fixWatch = [Diagnostics.Stopwatch]::StartNew()
         $found = $false
         while (-not $found -and $fixWatch.Elapsed.TotalSeconds -lt 240) {
@@ -415,7 +415,7 @@ Do not merge. It is created by `scripts/Reset-GitHubDemo.ps1` and replaced every
             if (-not $found) { Start-Sleep -Seconds 10 }
         }
         if ($found) { Write-Ok ("Copilot Autofix suggestion is on the pull request ({0:N0} s after the checks finished): Conversation tab, in the CodeQL annotation" -f $fixWatch.Elapsed.TotalSeconds) }
-        else { Write-Warn 'No Copilot Autofix suggestion appeared within 4 minutes (see the runbook for the fallback).' }
+        else { Write-Warn 'No Copilot Autofix suggestion appeared within 4 minutes. Look again later at the CodeQL annotation on the pull request Conversation tab.' }
     }
     Write-Note "Pull request: $($url.Trim())"
     Write-Note "Checks tab:   $($url.Trim())/checks"
