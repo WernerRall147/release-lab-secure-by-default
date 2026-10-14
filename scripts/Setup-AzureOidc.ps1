@@ -7,7 +7,9 @@
     1. Gets a Microsoft Graph token for the tenant of the named subscription (az account get-access-token).
        It never runs "az login" or "az account set" and never touches the default subscription.
     2. Creates the app registration, its service principal and one federated credential whose subject is
-       repo:<owner>/<repo>:environment:<environment>.
+       <subject prefix of this repository>:environment:<environment>. The prefix is read from the repository's
+       OIDC settings: repositories created after 15 July 2026 use an immutable subject with the numeric owner and
+       repository IDs (repo:<owner>@<id>/<repo>@<id>), older ones use repo:<owner>/<repo>.
     3. If the resource group already exists, grants the app the Reader role on that group only.
        Nothing inside the resource group is created, changed or deleted.
     4. Stores the three identifiers in repository VARIABLES (AZURE_CLIENT_ID, AZURE_TENANT_ID,
@@ -93,7 +95,10 @@ if (-not $sp) {
 }
 
 # --- Federated credential (subject = this repository + environment) ---
-$subject = "repo:${Repository}:environment:${Environment}"
+$prefix = gh api "repos/$Repository/actions/oidc/customization/sub" --jq '.sub_claim_prefix // empty'
+if ($LASTEXITCODE -ne 0) { throw 'Could not read the OIDC subject settings of the repository.' }
+if (-not $prefix) { $prefix = "repo:$Repository" }
+$subject = "${prefix}:environment:${Environment}"
 $credName = "github-environment-$Environment"
 $existing = (Invoke-Graph GET "/applications/$($app.id)/federatedIdentityCredentials").value | Where-Object { $_.name -eq $credName }
 if ($existing -and $existing.subject -ne $subject) {
