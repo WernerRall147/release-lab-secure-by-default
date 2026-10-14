@@ -1,4 +1,4 @@
-name: azure-deploy
+name: Azure sign-in (called by Deploy to Azure)
 
 # Reusable workflow called by deploy.yml. It holds the job that is protected by the "production" environment.
 on:

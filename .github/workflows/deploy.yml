@@ -1,4 +1,5 @@
-name: deploy
+name: Deploy to Azure (no stored passwords)
+run-name: Deploy ${{ inputs.tag }} to production
 
 on:
   workflow_dispatch:
