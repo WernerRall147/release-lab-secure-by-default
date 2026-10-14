@@ -55,5 +55,33 @@ def test_unknown_status_filter_returns_empty_list(client):
     assert body["summary"] == {"total": 0}
 
 
+def test_payment_status_can_be_filtered_by_channel_case_insensitively(client):
+    body = client.get(
+        "/api/payments/status", query_string={"channel": "mobile"}
+    ).get_json()
+    assert len(body["payments"]) == 3
+    assert {p["channel"] for p in body["payments"]} == {"MOBILE"}
+    assert body["summary"] == {"total": 3, "settled": 2, "failed": 1}
+
+
+def test_payment_status_filters_channel_and_status_together(client):
+    body = client.get(
+        "/api/payments/status",
+        query_string={"channel": "mobile", "status": "settled"},
+    ).get_json()
+    assert len(body["payments"]) == 2
+    assert {p["channel"] for p in body["payments"]} == {"MOBILE"}
+    assert {p["status"] for p in body["payments"]} == {"SETTLED"}
+    assert body["summary"] == {"total": 2, "settled": 2}
+
+
+def test_unknown_channel_filter_returns_empty_list(client):
+    body = client.get(
+        "/api/payments/status", query_string={"channel": "nope"}
+    ).get_json()
+    assert body["payments"] == []
+    assert body["summary"] == {"total": 0}
+
+
 def test_unknown_route_returns_404(client):
     assert client.get("/does-not-exist").status_code == 404

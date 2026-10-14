@@ -36,7 +36,13 @@ def create_app() -> Flask:
     @app.get("/api/payments/status")
     def payments_status():
         wanted = request.args.get("status", "").strip().lower()
-        records = [p for p in PAYMENTS if not wanted or p["status"].lower() == wanted]
+        channel = request.args.get("channel", "").strip().lower()
+        records = [
+            p
+            for p in PAYMENTS
+            if (not wanted or p["status"].lower() == wanted)
+            and (not channel or p["channel"].lower() == channel)
+        ]
         return jsonify(
             currency="NGN",
             synthetic=True,
