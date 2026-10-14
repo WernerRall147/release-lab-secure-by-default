@@ -34,9 +34,11 @@
     V1, V2, V3, V4 or All (default). All = V1, V2 and V3 (V4 only with -IncludeV4).
 
 .PARAMETER SeedDependabot
-    V2 only: also seed main with an outdated pin (see above). Takes about 5 to 15 minutes to settle. Do not close
-    the Dependabot pull request by hand afterwards: Dependabot closes it by itself when main is restored, whereas a
-    manual close makes Dependabot ignore that release in later runs.
+    V2 only: also seed main with an outdated pin (see above). The alerts appear after about 1 to 2 minutes. In testing,
+    Dependabot opened a fresh security-update pull request only the first time; when the same pin was seeded again the
+    alerts simply came back (same alert numbers) and no new pull request followed, so after 5 minutes the script
+    re-opens Dependabot's earlier pull request. Do not merge that pull request (a merged one cannot be re-opened) and
+    do not close it by hand: Dependabot closes it by itself when main is restored by a later reset.
 
 .PARAMETER PreventSelfReview
     V3 only: turn "prevent self-review" ON for the production environment. Default is OFF, so one presenter
@@ -254,9 +256,8 @@ function Restore-CleanMain {
     finally { Remove-StaleWorktree $wt }
     foreach ($pr in @(Invoke-GhJson pr list --repo $slug --state open --author 'app/dependabot' --json 'number,title')) {
         if ($pr.title -notmatch $SeedPackage) { continue }
-        # Dependabot closes its own pull request once the vulnerable pin is gone from main. Closing it by hand would
-        # make Dependabot ignore that release in later runs, so give it a few minutes and close by hand only as a
-        # last resort.
+        # Dependabot closes its own pull request about 2 to 3 minutes after the vulnerable pin is gone from main, so give
+        # it a few minutes and close by hand only as a last resort.
         $deadline = (Get-Date).AddMinutes(5)
         $state = 'OPEN'
         while ((Get-Date) -lt $deadline) {
@@ -266,7 +267,7 @@ function Restore-CleanMain {
         }
         if ($state -eq 'OPEN') {
             Invoke-Gh pr close $pr.number --repo $slug --delete-branch | Out-Null
-            Write-Warn "Dependabot pull request #$($pr.number) was still open after 5 minutes and was closed by hand. Dependabot may now ignore that release; the next seed re-opens the pull request if needed."
+            Write-Warn "Dependabot pull request #$($pr.number) was still open after 5 minutes and was closed by hand."
         }
         else { Write-Note "Dependabot closed its own pull request #$($pr.number) by itself ($state)." }
     }
@@ -433,7 +434,7 @@ function Restore-ClosedDependabotPr {
         $null = Invoke-Gh api -X POST "repos/$slug/git/refs" -f "ref=refs/heads/$($closed.headRefName)" -f "sha=$($closed.headRefOid)"
     }
     $null = Invoke-Gh pr reopen $closed.number --repo $slug
-    Write-Note "Dependabot had ignored this release after an earlier manual close - re-opened its pull request #$($closed.number)."
+    Write-Note "Dependabot did not open a new pull request for this update - re-opened its earlier pull request #$($closed.number) instead."
     return $closed
 }
 
