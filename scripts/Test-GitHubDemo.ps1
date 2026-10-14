@@ -51,6 +51,12 @@ function Invoke-GhApi([string] $Path) {
     if ($code -ne 0) { return $null }
     $text = ($out -join "`n").Trim()
     if (-not $text) { return [pscustomobject]@{ ok = $true } }
+    if ($text.StartsWith('[')) {
+        # An empty JSON array must stay an empty array (not $null), and Windows PowerShell 5.1 returns arrays unrolled.
+        $items = @()
+        foreach ($item in ($text | ConvertFrom-Json)) { $items += $item }
+        return , $items
+    }
     return ($text | ConvertFrom-Json)
 }
 
@@ -73,7 +79,7 @@ function Check([string] $Name, [scriptblock] $Test, [switch] $WarnOnly) {
     }
 }
 
-function Assert([bool] $Condition, [string] $Message) { if (-not $Condition) { throw $Message } }
+function Assert($Condition, [string] $Message) { if (-not $Condition) { throw $Message } }
 
 Write-Host "Smoke test for $slug" -ForegroundColor Cyan
 
@@ -221,12 +227,14 @@ Check 'Latest release is immutable with provenance and SBOM assets' {
 }
 Check 'Latest CI run on main succeeded' {
     $old = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
-    try { $json = & gh run list --repo $slug --workflow ci.yml --branch main --limit 1 --json conclusion,status 2>&1 | ForEach-Object { "$_" } }
+    try { $json = & gh run list --repo $slug --workflow ci.yml --branch main --limit 5 --json 'conclusion,status' 2>&1 | ForEach-Object { "$_" } }
     finally { $ErrorActionPreference = $old }
-    $run = ($json -join "`n" | ConvertFrom-Json) | Select-Object -First 1
-    Assert ($run) 'no CI run on main'
-    Assert ($run.conclusion -eq 'success') "status: $($run.status), conclusion: $($run.conclusion)"
-    'success'
+    $runs = @(); foreach ($item in (($json -join "`n") | ConvertFrom-Json)) { $runs += $item }
+    Assert ($runs.Count -gt 0) 'no CI run on main'
+    $done = $runs | Where-Object { $_.status -eq 'completed' } | Select-Object -First 1
+    Assert ($done) 'no completed CI run on main yet'
+    Assert ($done.conclusion -eq 'success') "latest completed run: $($done.conclusion)"
+    if ($runs[0].status -ne 'completed') { 'success (a newer run is still in progress)' } else { 'success' }
 }
 
 if ($Verify -and $latest) {
