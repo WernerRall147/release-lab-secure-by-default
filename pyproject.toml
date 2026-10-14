@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "contoso-payments-status-api"
+dynamic = ["version"]
+description = "Fictional Payments Status API used to demonstrate secure-by-default delivery on GitHub (synthetic data only)."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = ["Flask>=3.1,<4"]
+
+[tool.setuptools.dynamic]
+version = { attr = "app.__version__" }
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

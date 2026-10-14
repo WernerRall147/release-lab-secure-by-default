@@ -1,0 +1,57 @@
+name: azure-deploy
+
+# Reusable workflow called by deploy.yml. It holds the job that is protected by the "production" environment.
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: "Release tag being deployed"
+        required: true
+        type: string
+    secrets:
+      azure-client-id:
+        required: true
+      azure-tenant-id:
+        required: true
+      azure-subscription-id:
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: production
+      url: ${{ github.server_url }}/${{ github.repository }}/releases/tag/${{ inputs.tag }}
+    permissions:
+      id-token: write # lets the job request an OpenID Connect token; nothing is stored
+      contents: read
+    steps:
+      - name: Sign in to Azure with OpenID Connect (no stored password)
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ secrets.azure-client-id }}
+          tenant-id: ${{ secrets.azure-tenant-id }}
+          subscription-id: ${{ secrets.azure-subscription-id }}
+
+      - name: Read-only check of the target resource group
+        env:
+          TAG: ${{ inputs.tag }}
+          RESOURCE_GROUP: rg-release-lab
+        run: |
+          set -euo pipefail
+          echo "Release to deploy : $TAG"
+          echo "Target group      : $RESOURCE_GROUP"
+          if [[ "$(az group exists --name "$RESOURCE_GROUP")" == "true" ]]; then
+            state="$(az group show --name "$RESOURCE_GROUP" --query properties.provisioningState --output tsv)"
+            count="$(az resource list --resource-group "$RESOURCE_GROUP" --query 'length(@)' --output tsv)"
+            echo "Group state       : $state"
+            echo "Resources in group: $count"
+          else
+            echo "::warning::resource group not found (or not readable by this identity)"
+          fi
+          echo "Dry run only: nothing was created, changed or deleted."

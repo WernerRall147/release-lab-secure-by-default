@@ -1,0 +1,79 @@
+name: deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to deploy, for example v1.0.0 (default: the latest release)"
+        required: false
+        default: latest
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  # 1. Only a release whose provenance and SBOM attestations verify can move on to the approval gate.
+  verify-release:
+    name: verify-release
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      tag: ${{ steps.pick.outputs.tag }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Pick the release to deploy
+        id: pick
+        env:
+          REQUESTED: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if [[ "$REQUESTED" == "latest" ]]; then
+            tag="$(gh release view --json tagName --jq .tagName)"
+          else
+            tag="$REQUESTED"
+          fi
+          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::the release tag must look like v1.2.3"
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "Deploying release $tag"
+
+      - name: Download the release wheel
+        env:
+          TAG: ${{ steps.pick.outputs.tag }}
+        run: gh release download "$TAG" --dir artifact --pattern '*.whl'
+
+      - name: Verify the build provenance
+        run: |
+          gh attestation verify artifact/*.whl --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml"
+
+      - name: Verify the SBOM attestation
+        run: |
+          gh attestation verify artifact/*.whl --repo "$GITHUB_REPOSITORY" \
+            --predicate-type https://spdx.dev/Document/v2.3
+
+  # 2. The deployment waits here until a required reviewer approves (environment "production"),
+  #    then signs in to Azure with a short-lived OpenID Connect token - there is no stored password.
+  #    The three identifiers are repository variables, handed over as masked inputs so they never show in logs.
+  deploy:
+    name: deploy
+    needs: verify-release
+    uses: ./.github/workflows/azure-deploy.yml
+    permissions:
+      id-token: write
+      contents: read
+    with:
+      tag: ${{ needs.verify-release.outputs.tag }}
+    secrets:
+      azure-client-id: ${{ vars.AZURE_CLIENT_ID }}
+      azure-tenant-id: ${{ vars.AZURE_TENANT_ID }}
+      azure-subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
